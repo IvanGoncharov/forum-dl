@@ -47,6 +47,13 @@ def build_parser():
         help="HTTP connection timeout",
     )
     session.add_argument(
+        "--time-sleep",
+        metavar="SECONDS",
+        dest="time_sleep",
+        default="5",
+        help="time to sleep between request to avoid rate limit",
+    )
+    session.add_argument(
         "--download-timeout",
         metavar="SECONDS",
         dest="download_timeout",

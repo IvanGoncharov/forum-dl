@@ -39,7 +39,7 @@ class SessionOptions(BaseModel):
     headers: str | None = None
     header: list[str] = []
     get_urls: bool
-    cookies: str
+    time_sleep: int
 
 
 class Session:
@@ -181,6 +181,8 @@ class Session:
             should_retry=should_retry,
             **kwargs,
         )
+
+        time.sleep(self._options.time_sleep)
         response.raise_for_status()
 
         return response
