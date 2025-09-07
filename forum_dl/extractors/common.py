@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import *  # type: ignore
 
 from abc import ABC, abstractmethod
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 from pathlib import PurePosixPath
 from datetime import datetime
@@ -125,6 +125,7 @@ class File(Item):
     content: bytes | None = None
     os_path: str | None = None
     filename: str | None = None
+    excluded_urls: list[str] = Field(default_factory=list)  # URLs that should not be extracted (e.g., thumbnails)
 
 
 class Extractor(ABC):
@@ -396,7 +397,8 @@ class Extractor(ABC):
     @final
     def download_file(self, file: File):
         try:
-            return self._session.try_get(file.url, should_cache=True)
+            # For file downloads, use a longer timeout to prevent failures with large files
+            return self._session.try_get(file.url, should_cache=True, download_mode=True)
         except Exception as e:
             logging.warning(repr(e))
             logging.warning(traceback.format_exc())
@@ -477,6 +479,25 @@ class HtmlExtractor(Extractor):
                 return
 
             return PageState(url=urljoin(response.url, href), page=state.page + 1)
+            
+
+    def _should_skip_url(self, url: str, excluded_urls: list[str]) -> bool:
+        """Check if a URL should be skipped because it's excluded."""
+        return url in excluded_urls
+        
+    def _extract_forum_attachments(
+        self,
+        obj: Any,
+        path: tuple[str, ...],
+        subpath: tuple[str, ...],
+        response: Response,
+    ) -> list[File]:
+        """
+        Extract forum attachments from the page.
+        This is a method that forum-specific extractors should implement to handle attachments.
+        Default implementation returns an empty list.
+        """
+        return []
 
     @final
     def _extract_file_objects(
@@ -491,6 +512,15 @@ class HtmlExtractor(Extractor):
                 obj = soup_or_tag.soup
             case SoupTag():
                 obj = soup_or_tag.tag
+
+        # Extract forum attachments first
+        attachments = self._extract_forum_attachments(obj, path, subpath, response)
+        
+        # Collect all URLs that should be excluded
+        excluded_urls: list[str] = []
+        for attachment in attachments:
+            excluded_urls.extend(attachment.excluded_urls)
+            yield attachment
 
         embeds = obj.select(
             'link[rel="stylesheet"], embed, audio, img, object, svg, video'
@@ -526,6 +556,10 @@ class HtmlExtractor(Extractor):
                     if alt_text:
                         filename = alt_text
 
+                # Skip if this URL should be skipped
+                if self._should_skip_url(url, excluded_urls):
+                    continue
+
                 yield File(
                     path=path,
                     url=url,
@@ -541,12 +575,25 @@ class HtmlExtractor(Extractor):
                 if audio_title:
                     audio_filename = audio_title
                 
-                for source in embed.tag.find_all("source"):
-                    url = urljoin(response.url, source.get("src"))
+                # Find all source elements in the audio tag
+                for source_element in embed.tag.select('source'):
+                    # Skip if element doesn't have src attribute
+                    if not source_element.has_attr('src'):
+                        continue
+                        
+                    # Get the URL from src attribute
+                    src = source_element['src']
+                    url = urljoin(response.url, src)
                     
-                    # If source has a title attribute, use that instead
-                    source_tag = SoupTag(source)
-                    source_title = source_tag.get('title', '')
+                    # Skip if this URL should be skipped
+                    if self._should_skip_url(url, excluded_urls):
+                        continue
+                    
+                    # Try to get title from source element
+                    source_title = ""
+                    if source_element.has_attr('title'):
+                        source_title = source_element['title']
+                    # Use source title if available, otherwise use audio title
                     filename = source_title if source_title else audio_filename
                     
                     yield File(
@@ -562,6 +609,10 @@ class HtmlExtractor(Extractor):
                     url = urljoin(response.url, embed.get("src"))
                 except AttributeSearchError:
                     url = urljoin(response.url, embed.get("data-src"))
+                    
+                # Skip if this URL should be skipped
+                if self._should_skip_url(url, excluded_urls):
+                    continue
                     
                 # Try to extract filename from image attributes
                 filename = None
@@ -588,6 +639,10 @@ class HtmlExtractor(Extractor):
             elif embed.tag.name == "object":
                 url = urljoin(response.url, embed.get("data"))
                 
+                # Skip if this URL should be skipped
+                if self._should_skip_url(url, excluded_urls):
+                    continue
+                
                 # Try to extract filename from object attributes
                 filename = None
                 title = embed.get("title", "")
@@ -609,9 +664,16 @@ class HtmlExtractor(Extractor):
                     filename=filename
                 )
             elif embed.tag.name == "svg":
+                # Use response URL as SVG URL
+                svg_url = response.url
+                
+                # Skip if this URL should be skipped
+                if self._should_skip_url(svg_url, excluded_urls):
+                    continue
+                    
                 yield File(
                     path=path,
-                    url=response.url,
+                    url=svg_url,
                     origin=response.url,
                     data={},
                     subpath=subpath,

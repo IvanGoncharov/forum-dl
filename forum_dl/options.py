@@ -47,6 +47,13 @@ def build_parser():
         help="HTTP connection timeout",
     )
     session.add_argument(
+        "--download-timeout",
+        metavar="SECONDS",
+        dest="download_timeout",
+        default="60",
+        help="HTTP connection timeout for file downloads (default: 60)",
+    )
+    session.add_argument(
         "-R",
         "--retries",
         metavar="N",

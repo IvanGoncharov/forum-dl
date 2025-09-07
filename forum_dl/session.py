@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 class SessionOptions(BaseModel):
     timeout: float
+    download_timeout: float
     retries: int
     retry_sleep: float
     retry_sleep_multiplier: float
@@ -192,6 +193,7 @@ class Session:
         headers: dict[str, Any] = {},
         should_cache: bool = False,
         should_retry: bool = True,
+        download_mode: bool = False,
         **kwargs: Any,
     ) -> Response:
         logging.debug(f"Attempting GET {url} {params} {headers}")
@@ -227,17 +229,18 @@ class Session:
                 *,
                 params: dict[str, Any] = {},
                 headers: dict[str, Any] = {},
+                download_mode: bool = False,
                 **kwargs: Any,
             ):
-                return self._do_get(url, params=params, headers=headers, **kwargs)
+                return self._do_get(url, params=params, headers=headers, download_mode=download_mode, **kwargs)
 
             try:
-                response = retrying_get(url, params=params, headers=headers, **kwargs)
+                response = retrying_get(url, params=params, headers=headers, download_mode=download_mode, **kwargs)
             except:
                 self._past_failed_requests.add((url, frozen_params, frozen_headers))
                 raise
         else:
-            response = self._do_get(url, params=params, headers=headers, **kwargs)
+            response = self._do_get(url, params=params, headers=headers, download_mode=download_mode, **kwargs)
 
         if should_cache:
             self._cache[(url, frozen_params, frozen_headers)] = response
@@ -255,6 +258,7 @@ class Session:
         *,
         params: dict[str, Any] = {},
         headers: dict[str, Any] = {},
+        download_mode: bool = False,
         **kwargs: Any,
     ):
         if self._options.get_urls:
@@ -297,20 +301,28 @@ class Session:
         elif self._using_stealth_session:
             # StealthSession has built-in retry mechanism, set it based on our options
             retry_count = self._options.retries if self._options.retries > 0 else 0
+            # Use longer timeout for file downloads
+            timeout = self._options.download_timeout if download_mode else self._options.timeout
+            if download_mode:
+                logging.debug(f"Using download timeout: {timeout}s for {url}")
             return self._session.get(
                 url,
                 params=params,
                 headers=request_headers,
-                timeout=self._options.timeout,
+                timeout=timeout,
                 retry=retry_count,  # Use stealth-requests built-in retry
                 **kwargs,
             )
         else:
+            # Use longer timeout for file downloads
+            timeout = self._options.download_timeout if download_mode else self._options.timeout
+            if download_mode:
+                logging.debug(f"Using download timeout: {timeout}s for {url}")
             return self._session.get(
                 url,
                 params=params,
                 headers=request_headers,
-                timeout=self._options.timeout,
+                timeout=timeout,
                 **kwargs,
             )
 
