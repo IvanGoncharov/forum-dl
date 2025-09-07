@@ -11,7 +11,7 @@ Forum-dl is a scraper and archiver for forums (including Discourse, PhpBB, SMF),
 
 # Installation
 
-You can install stable Forum-dl from [PIP](#pip) or directly from the [repository](#repository). Minimum Python version is 3.10.11.
+You can install stable Forum-dl from [PIP](#pip) or directly from the [repository](#repository). Supported Python versions are 3.10, 3.11, and 3.12.
 
 ## PIP
 
