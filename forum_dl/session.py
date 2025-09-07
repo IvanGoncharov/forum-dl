@@ -12,6 +12,7 @@ from tenacity import (
 )
 import time
 import logging
+import http.cookiejar
 
 from .exceptions import AlreadyVisitedError, AlreadyFailedError
 from .version import __version__
@@ -28,6 +29,7 @@ class SessionOptions(BaseModel):
     warc_output: str
     user_agent: str
     get_urls: bool
+    cookies: str
 
 
 class Session:
@@ -57,6 +59,15 @@ class Session:
         self._past_failed_requests: set[
             tuple[str, frozenset[tuple[str, Any]], frozenset[tuple[str, Any]]]
         ] = set()
+
+        if options.cookies:
+            try:
+                cookie_jar = http.cookiejar.MozillaCookieJar(options.cookies)
+                cookie_jar.load(ignore_discard=True, ignore_expires=True)
+                self._session.cookies = cookie_jar
+                logging.info(f"Loaded cookies from {options.cookies}")
+            except Exception as e:
+                logging.error(f"Failed to load cookies from {options.cookies}: {e}")
 
         self.delay = 1
         self.attempts = 0

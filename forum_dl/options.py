@@ -75,6 +75,13 @@ def build_parser():
         default=f"Forum-dl {__version__}",
         help="User-Agent request header",
     )
+    session.add_argument(
+        "--cookies",
+        metavar="FILE",
+        dest="cookies",
+        default="",
+        help="Path to a Netscape format cookies.txt file",
+    )
 
     output = parser.add_argument_group("Output Options")
     output.add_argument(
