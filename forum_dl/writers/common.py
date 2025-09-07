@@ -147,10 +147,46 @@ class Writer(ABC):
 
         if self._options.files_output_path:
             os.makedirs(self._options.files_output_path, exist_ok=True)
-
-            file_path = os.path.join(
-                self._options.files_output_path, quote_plus(file.url)
-            )
+            
+            # Use the suggested filename if provided, otherwise extract from URL
+            if file.filename:
+                filename = file.filename
+            else:
+                # Extract a better filename from the URL
+                parsed_url = urlparse(file.url)
+                path_parts = parsed_url.path.split('/')
+                
+                # Get the last non-empty part of the path
+                filename = next((part for part in reversed(path_parts) if part), "file")
+            
+            # If the filename has no extension or unusual format, use a fallback
+            if '.' not in filename or len(filename) < 4:
+                # Still include the URL-encoded version as fallback
+                file_path = os.path.join(
+                    self._options.files_output_path, quote_plus(file.url)
+                )
+            else:
+                # Use the extracted filename, ensuring uniqueness
+                safe_filename = filename.replace(' ', '_')
+                file_path = os.path.join(
+                    self._options.files_output_path, safe_filename
+                )
+                
+                # Handle filename collisions
+                counter = 1
+                while os.path.exists(file_path):
+                    name_parts = safe_filename.rsplit('.', 1)
+                    if len(name_parts) > 1:
+                        file_path = os.path.join(
+                            self._options.files_output_path, 
+                            f"{name_parts[0]}_{counter}.{name_parts[1]}"
+                        )
+                    else:
+                        file_path = os.path.join(
+                            self._options.files_output_path, 
+                            f"{safe_filename}_{counter}"
+                        )
+                    counter += 1
 
             if file.content:
                 file.os_path = file_path
@@ -160,16 +196,70 @@ class Writer(ABC):
 
                 file.content = None
             elif match := re.match("data:(.+/.+);base64,(.*)", file.url):
-                file.content_type = match.group(1)
+                content_type = match.group(1)
+                file.content_type = content_type
+                
+                # Generate a filename based on content type if it's a data URL
+                extension = content_type.split('/')[-1]
+                if '.' not in os.path.basename(file_path):
+                    # Add appropriate extension based on content type
+                    file_path = f"{file_path}.{extension}"
+                
                 file.os_path = file_path
 
                 with open(file_path, "wb") as f:
                     f.write(b64decode(match.group(2)))
             elif response := self._extractor.download_file(file):
-                print(response.headers)
+                # Get content type from headers
                 file.content_type = response.headers.get(
                     "Content-Type", "application/octet-stream"
                 )
+                
+                # Priority system for filename:
+                # 1. Already set filename from extractor (from HTML attributes)
+                # 2. Content-Disposition header
+                # 3. Fallback to URL-based filename (already set in filename variable)
+                
+                # Only check Content-Disposition if no filename from extractor
+                if not file.filename:
+                    content_disposition = response.headers.get("Content-Disposition", "")
+                    if content_disposition:
+                        # Extract filename from Content-Disposition
+                        cd_filename_match = re.search(r'filename="([^"]+)"', content_disposition)
+                        if cd_filename_match:
+                            # Set the filename on the file object
+                            file.filename = cd_filename_match.group(1)
+                
+                # Now if we have a filename from either source, use it
+                if file.filename:
+                    # Override our URL-based filename with the better one
+                    filename = file.filename
+                    
+                    # Create new path with this filename
+                    safe_filename = filename.replace(' ', '_')
+                    new_file_path = os.path.join(
+                        self._options.files_output_path, safe_filename
+                    )
+                    
+                    # Handle filename collisions
+                    counter = 1
+                    while os.path.exists(new_file_path):
+                        name_parts = safe_filename.rsplit('.', 1)
+                        if len(name_parts) > 1:
+                            new_file_path = os.path.join(
+                                self._options.files_output_path, 
+                                f"{name_parts[0]}_{counter}.{name_parts[1]}"
+                            )
+                        else:
+                            new_file_path = os.path.join(
+                                self._options.files_output_path, 
+                                f"{safe_filename}_{counter}"
+                            )
+                        counter += 1
+                    
+                    # Use this path instead
+                    file_path = new_file_path
+                        
                 file.os_path = file_path
 
                 with open(file_path, "wb") as f:

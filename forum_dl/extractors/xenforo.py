@@ -493,6 +493,14 @@ class XenforoExtractor(HtmlExtractor):
 
         bbwrapper_div = tag.find("div", class_="bbWrapper")
 
+        # Get the full HTML content including all embedded elements
+        content_html = str(bbwrapper_div.tag)
+
+        # Check if there's a message-attachments section in the post
+        if attachments_section := tag.try_find("section", class_="message-attachments"):
+            # Append it to the content to ensure attachments are included
+            content_html += str(attachments_section.tag)
+
         return Post(
             path=thread.path,
             subpath=subpath,
@@ -501,5 +509,5 @@ class XenforoExtractor(HtmlExtractor):
             data={},
             author=author,
             creation_time=time_tag.get("datetime"),
-            content=bbwrapper_div.string,
+            content=content_html,
         )

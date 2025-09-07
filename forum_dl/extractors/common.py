@@ -124,6 +124,7 @@ class File(Item):
     content_type: str | None = None
     content: bytes | None = None
     os_path: str | None = None
+    filename: str | None = None
 
 
 class Extractor(ABC):
@@ -512,6 +513,18 @@ class HtmlExtractor(Extractor):
                 )
             elif embed.tag.name == "embed":
                 url = urljoin(response.url, embed.get("src"))
+                
+                # Try to extract filename from embed attributes
+                filename = None
+                title = embed.get("title", "")
+                if title:
+                    filename = title
+                
+                # If no title, check for alt attribute
+                if not filename:
+                    alt_text = embed.get("alt", "")
+                    if alt_text:
+                        filename = alt_text
 
                 yield File(
                     path=path,
@@ -519,22 +532,50 @@ class HtmlExtractor(Extractor):
                     origin=response.url,
                     data={},
                     subpath=subpath + (url,),
+                    filename=filename
                 )
             elif embed.tag.name == "audio":
+                # Try to extract a filename from the audio element first
+                audio_filename = None
+                audio_title = embed.get('title', '')
+                if audio_title:
+                    audio_filename = audio_title
+                
                 for source in embed.tag.find_all("source"):
                     url = urljoin(response.url, source.get("src"))
+                    
+                    # If source has a title attribute, use that instead
+                    source_tag = SoupTag(source)
+                    source_title = source_tag.get('title', '')
+                    filename = source_title if source_title else audio_filename
+                    
                     yield File(
                         path=path,
                         url=url,
                         origin=response.url,
                         data={},
                         subpath=subpath + (url,),
+                        filename=filename
                     )
             elif embed.tag.name == "img":
                 try:
                     url = urljoin(response.url, embed.get("src"))
                 except AttributeSearchError:
                     url = urljoin(response.url, embed.get("data-src"))
+                    
+                # Try to extract filename from image attributes
+                filename = None
+                
+                # First check alt attribute, which often has the filename
+                alt_text = embed.get("alt", "")
+                if alt_text:
+                    filename = alt_text
+                    
+                # If no alt text, check title attribute
+                if not filename:
+                    title = embed.get("title", "")
+                    if title:
+                        filename = title
 
                 yield File(
                     path=path,
@@ -542,15 +583,30 @@ class HtmlExtractor(Extractor):
                     origin=response.url,
                     data={},
                     subpath=subpath + (url,),
+                    filename=filename
                 )
             elif embed.tag.name == "object":
                 url = urljoin(response.url, embed.get("data"))
+                
+                # Try to extract filename from object attributes
+                filename = None
+                title = embed.get("title", "")
+                if title:
+                    filename = title
+                    
+                # Check for data-title attribute (used in some forums)
+                if not filename:
+                    data_title = embed.get("data-title", "")
+                    if data_title:
+                        filename = data_title
+                
                 yield File(
                     path=path,
                     url=url,
                     origin=response.url,
                     data={},
                     subpath=subpath + (url,),
+                    filename=filename
                 )
             elif embed.tag.name == "svg":
                 yield File(
