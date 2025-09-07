@@ -6,5 +6,5 @@ from .common import FileWriter, Entry
 
 
 class JsonlWriter(FileWriter):
-    def _serialize_entry(self, entry: Entry):
-        return entry.model_dump_json()
+    def _serialize_entry(self, entry: Entry) -> str:
+        return entry.model_dump_json(serialize_as_any=True)
