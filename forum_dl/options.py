@@ -82,6 +82,21 @@ def build_parser():
         default="",
         help="Path to a Netscape format cookies.txt file",
     )
+    session.add_argument(
+        "--headers",
+        metavar="FILE",
+        dest="headers",
+        default="",
+        help="Path to a file containing additional HTTP headers (one per line in 'Name: Value' format)",
+    )
+    session.add_argument(
+        "--header",
+        metavar="HEADER",
+        dest="header",
+        action="append",
+        default=[],
+        help="Specify a custom header in 'Name: Value' format (can be used multiple times)",
+    )
 
     output = parser.add_argument_group("Output Options")
     output.add_argument(

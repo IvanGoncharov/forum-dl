@@ -28,6 +28,9 @@ class SessionOptions(BaseModel):
     retry_sleep_multiplier: float
     warc_output: str
     user_agent: str
+    cookies: str | None = None
+    headers: str | None = None
+    header: list[str] = []
     get_urls: bool
     cookies: str
 
@@ -68,6 +71,25 @@ class Session:
                 logging.info(f"Loaded cookies from {options.cookies}")
             except Exception as e:
                 logging.error(f"Failed to load cookies from {options.cookies}: {e}")
+                
+        # Load custom headers
+        self._session.headers["User-Agent"] = options.user_agent
+        
+        # Load headers from file if specified
+        if options.headers:
+            logging.info(f"Loaded headers from {options.headers}")
+            with open(options.headers, "r") as f:
+                for line in f:
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        self._session.headers[key.strip()] = value.strip()
+                
+        # Load headers from command line arguments
+        if options.header:
+            for header in options.header:
+                if ":" in header:
+                    key, value = header.split(":", 1)
+                    self._session.headers[key.strip()] = value.strip()
 
         self.delay = 1
         self.attempts = 0
@@ -178,6 +200,18 @@ class Session:
 
         if not headers:
             headers = {"User-Agent": self._options.user_agent}
+        elif "User-Agent" not in headers:
+            headers["User-Agent"] = self._options.user_agent
+            
+        # Add any custom headers from headers file or command line
+        if hasattr(self, '_custom_headers') and self._custom_headers:
+            for key, value in self._custom_headers.items():
+                if key not in headers:  # Don't override headers provided directly to the method
+                    headers[key] = value
+                    
+        # Only log complete headers in debug mode
+        if logging.getLogger().level <= logging.DEBUG:
+            logging.debug(f"Request headers: {headers}")
 
         if self._warc_file:
             with self._capture_http(self._warc_writer):

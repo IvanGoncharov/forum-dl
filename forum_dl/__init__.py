@@ -43,6 +43,8 @@ def main():
                 user_agent=args.user_agent,
                 get_urls=args.get_urls,
                 cookies=args.cookies,
+                headers=args.headers,
+                header=args.header,
             ),
             extractor_options=ExtractorOptions(
                 path=False,
