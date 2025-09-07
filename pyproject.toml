@@ -24,7 +24,7 @@ classifiers = [
 version = "0.3.1"
 license = {text = "MIT"}
 
-dependencies = ["pydantic>=2.0.0", "beautifulsoup4", "lxml", "requests", "urllib3", "tenacity", "dateparser", "html2text", "warcio", "typing-extensions>=4.0.0"]
+dependencies = ["pydantic>=2.0.0", "beautifulsoup4", "lxml", "requests", "urllib3", "tenacity", "dateparser", "html2text", "warcio", "typing-extensions>=4.0.0", "stealth-requests>=0.1.6", "curl-cffi>=0.7.0"]
 requires-python = ">=3.10"
 
 [project.urls]

@@ -14,11 +14,17 @@ import time
 import logging
 import http.cookiejar
 
+# Import stealth-requests for browser fingerprinting
+import stealth_requests
+from stealth_requests import StealthSession as SSession
+from curl_cffi.requests.session import HttpMethod
+
 from .exceptions import AlreadyVisitedError, AlreadyFailedError
 from .version import __version__
 
 if TYPE_CHECKING:
     from requests import Response
+    from stealth_requests import StealthResponse
 
 
 class SessionOptions(BaseModel):
@@ -38,6 +44,7 @@ class SessionOptions(BaseModel):
 class Session:
     def __init__(self, options: SessionOptions):
         self._warc_file = None
+        self._using_stealth_session = True  # Flag to indicate we're using StealthSession
 
         if options.warc_output:
             from warcio.warcwriter import WARCWriter
@@ -46,15 +53,28 @@ class Session:
             self._capture_http = capture_http
             self._warc_file = open(options.warc_output, "wb")
             self._warc_writer = WARCWriter(self._warc_file)
-
-        # For the `warcio` recording to work, `requests` must be imported only after `capture_http`.
-        import requests
-
-        self._session = requests.Session()
+            
+            # WARC recording requires regular requests, not stealth_requests
+            self._using_stealth_session = False
+            import requests
+            self._session = requests.Session()
+        else:
+            # Use StealthSession for browser fingerprinting to bypass Cloudflare
+            # Initialize StealthSession without any arguments - we'll configure it after creation
+            try:
+                self._session = SSession()  # Initialize with defaults
+                logging.info("Using StealthSession for browser fingerprinting to bypass Cloudflare")
+            except Exception as e:
+                # Fallback to regular requests if there's an issue
+                logging.warning(f"Failed to initialize StealthSession: {e}. Falling back to regular requests.")
+                self._using_stealth_session = False
+                import requests
+                self._session = requests.Session()
+        
         self._options = options
         self._cache: dict[
             tuple[str, frozenset[tuple[str, Any]], frozenset[tuple[str, Any]]],
-            requests.Response,
+            Union[Response, 'StealthResponse'],
         ] = {}
         self._past_requests: set[
             tuple[str, frozenset[tuple[str, Any]], frozenset[tuple[str, Any]]]
@@ -62,18 +82,45 @@ class Session:
         self._past_failed_requests: set[
             tuple[str, frozenset[tuple[str, Any]], frozenset[tuple[str, Any]]]
         ] = set()
+        
+        # Initialize custom headers dictionary
+        self._custom_headers = {}
 
+        # Load cookies if provided
         if options.cookies:
             try:
-                cookie_jar = http.cookiejar.MozillaCookieJar(options.cookies)
-                cookie_jar.load(ignore_discard=True, ignore_expires=True)
-                self._session.cookies = cookie_jar
-                logging.info(f"Loaded cookies from {options.cookies}")
+                if self._using_stealth_session:
+                    # Load cookies into StealthSession
+                    # StealthSession just needs cookies as a dict
+                    cookie_jar = http.cookiejar.MozillaCookieJar(options.cookies)
+                    cookie_jar.load(ignore_discard=True, ignore_expires=True)
+                    # Convert to dict format required by StealthSession
+                    for cookie in cookie_jar:
+                        self._session.cookies.set(cookie.name, cookie.value, 
+                                                domain=cookie.domain)
+                    logging.info(f"Loaded cookies from {options.cookies} into StealthSession")
+                else:
+                    # Regular requests session
+                    cookie_jar = http.cookiejar.MozillaCookieJar(options.cookies)
+                    cookie_jar.load(ignore_discard=True, ignore_expires=True)
+                    self._session.cookies = cookie_jar
+                    logging.info(f"Loaded cookies from {options.cookies}")
             except Exception as e:
                 logging.error(f"Failed to load cookies from {options.cookies}: {e}")
-                
+        
         # Load custom headers
-        self._session.headers["User-Agent"] = options.user_agent
+        custom_headers = {}
+        
+        # Handle User-Agent
+        if options.user_agent:
+            if self._using_stealth_session:
+                # For StealthSession, we'll need to add this to custom_headers
+                # It will override the automatic UA rotation in stealth_requests
+                custom_headers["User-Agent"] = options.user_agent
+                logging.debug(f"StealthSession will use custom User-Agent: {options.user_agent}")
+            else:
+                # For regular session, set directly
+                self._session.headers["User-Agent"] = options.user_agent
         
         # Load headers from file if specified
         if options.headers:
@@ -82,14 +129,24 @@ class Session:
                 for line in f:
                     if ":" in line:
                         key, value = line.split(":", 1)
-                        self._session.headers[key.strip()] = value.strip()
+                        custom_headers[key.strip()] = value.strip()
                 
         # Load headers from command line arguments
         if options.header:
             for header in options.header:
                 if ":" in header:
                     key, value = header.split(":", 1)
-                    self._session.headers[key.strip()] = value.strip()
+                    custom_headers[key.strip()] = value.strip()
+        
+        # Apply custom headers if we have any
+        if custom_headers:
+            if self._using_stealth_session:
+                # Store headers to be used in each request
+                self._custom_headers = custom_headers
+            else:
+                # Apply directly to session
+                for key, value in custom_headers.items():
+                    self._session.headers[key] = value
 
         self.delay = 1
         self.attempts = 0
@@ -97,6 +154,13 @@ class Session:
     def __del__(self):
         if self._warc_file:
             self._warc_file.close()
+            
+        # Close the session
+        if hasattr(self, '_session') and self._session:
+            try:
+                self._session.close()
+            except:
+                pass
 
     def get(
         self,
@@ -198,35 +262,54 @@ class Session:
         else:
             logging.info(f"GET {url} {params} {headers}")
 
-        if not headers:
-            headers = {"User-Agent": self._options.user_agent}
-        elif "User-Agent" not in headers:
-            headers["User-Agent"] = self._options.user_agent
+        # Prepare headers based on session type
+        request_headers = {}
+        if self._using_stealth_session:
+            # StealthSession will handle User-Agent automatically
+            request_headers = headers.copy()
+        else:
+            # Regular session needs User-Agent
+            request_headers = headers.copy()
+            if not request_headers:
+                request_headers = {"User-Agent": self._options.user_agent}
+            elif "User-Agent" not in request_headers:
+                request_headers["User-Agent"] = self._options.user_agent
             
         # Add any custom headers from headers file or command line
         if hasattr(self, '_custom_headers') and self._custom_headers:
             for key, value in self._custom_headers.items():
-                if key not in headers:  # Don't override headers provided directly to the method
-                    headers[key] = value
+                if key not in request_headers:  # Don't override headers provided directly to the method
+                    request_headers[key] = value
                     
         # Only log complete headers in debug mode
         if logging.getLogger().level <= logging.DEBUG:
-            logging.debug(f"Request headers: {headers}")
+            logging.debug(f"Request headers: {request_headers}")
 
         if self._warc_file:
             with self._capture_http(self._warc_writer):
                 return self._session.get(
                     url,
                     params=params,
-                    headers=headers,
+                    headers=request_headers,
                     timeout=self._options.timeout,
                     **kwargs,
                 )
+        elif self._using_stealth_session:
+            # StealthSession has built-in retry mechanism, set it based on our options
+            retry_count = self._options.retries if self._options.retries > 0 else 0
+            return self._session.get(
+                url,
+                params=params,
+                headers=request_headers,
+                timeout=self._options.timeout,
+                retry=retry_count,  # Use stealth-requests built-in retry
+                **kwargs,
+            )
         else:
             return self._session.get(
                 url,
                 params=params,
-                headers=headers,
+                headers=request_headers,
                 timeout=self._options.timeout,
                 **kwargs,
             )
