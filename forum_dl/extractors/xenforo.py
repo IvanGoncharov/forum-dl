@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 import re
 
 from .common import normalize_url, regex_match
-from .common import HtmlExtractor, ExtractorOptions, Board, Thread, Post, PageState
+from .common import HtmlExtractor, ExtractorOptions, Board, Thread, Post, PageState, File
 from ..session import Session
 from ..soup import Soup, SoupTag
 
@@ -15,6 +15,10 @@ if TYPE_CHECKING:
 
 
 class XenforoExtractor(HtmlExtractor):
+    """
+    Extractor for XenForo-based forums.
+    Includes special handling for attachments to retrieve full-size images instead of thumbnails.
+    """
     tests = [
         {
             "url": "https://xenforo.com/community",
@@ -511,3 +515,83 @@ class XenforoExtractor(HtmlExtractor):
             creation_time=time_tag.get("datetime"),
             content=content_html,
         )
+        
+    def _extract_forum_attachments(
+        self,
+        obj: Any,
+        path: tuple[str, ...],
+        subpath: tuple[str, ...],
+        response: Response,
+    ) -> list[File]:
+        """
+        Extract XenForo forum attachments.
+        
+        This method finds full-size image URLs for XenForo forum attachments and 
+        identifies their corresponding thumbnail URLs to prevent duplicate extraction.
+        
+        Args:
+            obj: The BeautifulSoup object to extract attachments from
+            path: Path identifying the thread
+            subpath: Path identifying the post within the thread
+            response: The HTTP response object containing the page URL
+            
+        Returns:
+            list[File]: Attachment files with excluded_urls containing their thumbnail URLs
+        """
+        attachments: list[File] = []
+        
+        # Find all attachment sections on the page
+        attachment_sections = obj.select('.message-attachments')
+        
+        for section in attachment_sections:
+            section_tag = SoupTag(section)
+            # In XenForo, full-sized images are in <a class="file-preview"> elements
+            preview_links = section_tag.tag.select('a.file-preview')
+            
+            for link_element in preview_links:
+                link_tag = SoupTag(link_element)
+                href = link_tag.get("href")
+                
+                if not href:
+                    continue
+                
+                # This is the full-size image URL
+                full_url = urljoin(response.url, href)
+                
+                # XenForo uses /data/attachments/ for thumbnails, not full-size images
+                if '/data/attachments/' in full_url:
+                    continue
+                
+                filename = ""
+                excluded_urls: list[str] = []
+                img = link_tag.try_find('img')
+                
+                # The <img> inside the link contains both the thumbnail URL and the filename
+                if img:
+                    # Get filename from alt text
+                    filename = img.get("alt", "")
+                    
+                    # Get thumbnail URL from src attribute
+                    img_src = img.get("src", "")
+                    if img_src:
+                        thumbnail_url = urljoin(response.url, img_src)
+                        # Add thumbnail URL to excluded_urls to prevent duplicate download
+                        excluded_urls.append(thumbnail_url)
+                
+                # Fall back to using the filename from the URL if no alt text
+                if not filename:
+                    filename = full_url.split('/')[-1]
+                
+                attachments.append(
+                    File(
+                        path=path,
+                        url=full_url,
+                        origin=response.url,
+                        data={},
+                        subpath=subpath + (full_url,),
+                        filename=filename,
+                        excluded_urls=excluded_urls
+                    )
+                )
+        
+        return attachments
