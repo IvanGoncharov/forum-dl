@@ -46,6 +46,7 @@ def main():
                 cookies=args.cookies,
                 headers=args.headers,
                 header=args.header,
+                time_sleep=args.time_sleep,
             ),
             extractor_options=ExtractorOptions(
                 path=False,
